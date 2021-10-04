@@ -121,115 +121,7 @@ class GoogleDriveHelper:
         }
         return self.__service.permissions().create(supportsTeamDrives=True, fileId=drive_id,
                                                    body=permissions).execute()
-
-    @retry(wait=wait_exponential(multiplier=2, min=3, max=6), stop=stop_after_attempt(5),
-           retry=retry_if_exception_type(HttpError), before=before_log(LOGGER, logging.DEBUG))
-    def upload_file(self, file_path, file_name, mime_type, parent_id):
-        # File body description
-        file_metadata = {
-            'name': file_name,
-            'description': 'mirror',
-            'mimeType': mime_type,
-        }
-        if parent_id is not None:
-            file_metadata['parents'] = [parent_id]
-
-        if os.path.getsize(file_path) == 0:
-            media_body = MediaFileUpload(file_path,
-                                         mimetype=mime_type,
-                                         resumable=False)
-            response = self.__service.files().create(supportsTeamDrives=True,
-                                                     body=file_metadata, media_body=media_body).execute()
-            if not IS_TEAM_DRIVE:
-                self.__set_permission(response['id'])
-
-            drive_file = self.__service.files().get(supportsTeamDrives=True,
-                                                    fileId=response['id']).execute()
-            download_url = self.__G_DRIVE_BASE_DOWNLOAD_URL.format(drive_file.get('id'))
-            return download_url
-        media_body = MediaFileUpload(file_path,
-                                     mimetype=mime_type,
-                                     resumable=True,
-                                     chunksize=50 * 1024 * 1024)
-
-        # Insert a file
-        drive_file = self.__service.files().create(supportsTeamDrives=True,
-                                                   body=file_metadata, media_body=media_body)
-        response = None
-        while response is None:
-            if self.is_cancelled:
-                return None
-            try:
-                self.status, response = drive_file.next_chunk()
-            except HttpError as err:
-                if err.resp.get('content-type', '').startswith('application/json'):
-                    reason = json.loads(err.content).get('error').get('errors')[0].get('reason')
-                    if reason == 'userRateLimitExceeded' or reason == 'dailyLimitExceeded':
-                        if USE_SERVICE_ACCOUNTS:
-                            self.switchServiceAccount()
-                            LOGGER.info(f"Got: {reason}, Trying Again.")
-                            return self.upload_file(file_path, file_name, mime_type, parent_id)
-                    else:
-                        raise err
-        self._file_uploaded_bytes = 0
-        # Insert new permissions
-        if not IS_TEAM_DRIVE:
-            self.__set_permission(response['id'])
-        # Define file instance and get url for download
-        drive_file = self.__service.files().get(supportsTeamDrives=True, fileId=response['id']).execute()
-        download_url = self.__G_DRIVE_BASE_DOWNLOAD_URL.format(drive_file.get('id'))
-        return download_url
-
-    def upload(self, file_name: str):
-        if USE_SERVICE_ACCOUNTS:
-            self.service_account_count = len(os.listdir("accounts"))
-        self.__listener.onUploadStarted()
-        file_dir = f"{DOWNLOAD_DIR}{self.__listener.message.message_id}"
-        file_path = f"{file_dir}/{file_name}"
-        LOGGER.info("Uploading File: " + file_path)
-        self.start_time = time.time()
-        self.updater = setInterval(self.update_interval, self._on_upload_progress)
-        if os.path.isfile(file_path):
-            try:
-                mime_type = get_mime_type(file_path)
-                link = self.upload_file(file_path, file_name, mime_type, parent_id)
-                if link is None:
-                    raise Exception('Upload has been manually cancelled')
-                LOGGER.info("Uploaded To G-Drive: " + file_path)
-            except Exception as e:
-                if isinstance(e, RetryError):
-                    LOGGER.info(f"Total Attempts: {e.last_attempt.attempt_number}")
-                    err = e.last_attempt.exception()
-                else:
-                    err = e
-                LOGGER.error(err)
-                self.__listener.onUploadError(str(err))
-                return
-            finally:
-                self.updater.cancel()
-        else:
-            try:
-                dir_id = self.create_directory(os.path.basename(os.path.abspath(file_name)), parent_id)
-                result = self.upload_dir(file_path, dir_id)
-                if result is None:
-                    raise Exception('Upload has been manually cancelled!')
-                LOGGER.info("Uploaded To G-Drive: " + file_name)
-                link = f"https://drive.google.com/folderview?id={dir_id}"
-            except Exception as e:
-                if isinstance(e, RetryError):
-                    LOGGER.info(f"Total Attempts: {e.last_attempt.attempt_number}")
-                    err = e.last_attempt.exception()
-                else:
-                    err = e
-                LOGGER.error(err)
-                self.__listener.onUploadError(str(err))
-                return
-            finally:
-                self.updater.cancel()
-        LOGGER.info(download_dict)
-        self.__listener.onUploadComplete(link)
-        LOGGER.info("Deleting downloaded file/folder..")
-        return link
+    
 
     @retry(wait=wait_exponential(multiplier=2, min=3, max=6), stop=stop_after_attempt(5),
            retry=retry_if_exception_type(HttpError), before=before_log(LOGGER, logging.DEBUG))
@@ -344,6 +236,115 @@ class GoogleDriveHelper:
                         err = e
                     LOGGER.error(err)
         return new_id
+    
+    @retry(wait=wait_exponential(multiplier=2, min=3, max=6), stop=stop_after_attempt(5),
+           retry=retry_if_exception_type(HttpError), before=before_log(LOGGER, logging.DEBUG))
+    def upload_file(self, file_path, file_name, mime_type, parent_id):
+        # File body description
+        file_metadata = {
+            'name': file_name,
+            'description': 'mirror',
+            'mimeType': mime_type,
+        }
+        if parent_id is not None:
+            file_metadata['parents'] = [parent_id]
+
+        if os.path.getsize(file_path) == 0:
+            media_body = MediaFileUpload(file_path,
+                                         mimetype=mime_type,
+                                         resumable=False)
+            response = self.__service.files().create(supportsTeamDrives=True,
+                                                     body=file_metadata, media_body=media_body).execute()
+            if not IS_TEAM_DRIVE:
+                self.__set_permission(response['id'])
+
+            drive_file = self.__service.files().get(supportsTeamDrives=True,
+                                                    fileId=response['id']).execute()
+            download_url = self.__G_DRIVE_BASE_DOWNLOAD_URL.format(drive_file.get('id'))
+            return download_url
+        media_body = MediaFileUpload(file_path,
+                                     mimetype=mime_type,
+                                     resumable=True,
+                                     chunksize=50 * 1024 * 1024)
+
+        # Insert a file
+        drive_file = self.__service.files().create(supportsTeamDrives=True,
+                                                   body=file_metadata, media_body=media_body)
+        response = None
+        while response is None:
+            if self.is_cancelled:
+                return None
+            try:
+                self.status, response = drive_file.next_chunk()
+            except HttpError as err:
+                if err.resp.get('content-type', '').startswith('application/json'):
+                    reason = json.loads(err.content).get('error').get('errors')[0].get('reason')
+                    if reason == 'userRateLimitExceeded' or reason == 'dailyLimitExceeded':
+                        if USE_SERVICE_ACCOUNTS:
+                            self.switchServiceAccount()
+                            LOGGER.info(f"Got: {reason}, Trying Again.")
+                            return self.upload_file(file_path, file_name, mime_type, parent_id)
+                    else:
+                        raise err
+        self._file_uploaded_bytes = 0
+        # Insert new permissions
+        if not IS_TEAM_DRIVE:
+            self.__set_permission(response['id'])
+        # Define file instance and get url for download
+        drive_file = self.__service.files().get(supportsTeamDrives=True, fileId=response['id']).execute()
+        download_url = self.__G_DRIVE_BASE_DOWNLOAD_URL.format(drive_file.get('id'))
+        return download_url
+
+    def upload(self, file_name: str):
+        if USE_SERVICE_ACCOUNTS:
+            self.service_account_count = len(os.listdir("accounts"))
+        self.__listener.onUploadStarted()
+        file_dir = f"{DOWNLOAD_DIR}{self.__listener.message.message_id}"
+        file_path = f"{file_dir}/{file_name}"
+        LOGGER.info("Uploading File: " + file_path)
+        self.start_time = time.time()
+        self.updater = setInterval(self.update_interval, self._on_upload_progress)
+        if os.path.isfile(file_path):
+            try:
+                mime_type = get_mime_type(file_path)
+                link = self.upload_file(file_path, file_name, mime_type, parent_id)
+                if link is None:
+                    raise Exception('Upload has been manually cancelled')
+                LOGGER.info("Uploaded To G-Drive: " + file_path)
+            except Exception as e:
+                if isinstance(e, RetryError):
+                    LOGGER.info(f"Total Attempts: {e.last_attempt.attempt_number}")
+                    err = e.last_attempt.exception()
+                else:
+                    err = e
+                LOGGER.error(err)
+                self.__listener.onUploadError(str(err))
+                return
+            finally:
+                self.updater.cancel()
+        else:
+            try:
+                dir_id = self.create_directory(os.path.basename(os.path.abspath(file_name)), parent_id)
+                result = self.upload_dir(file_path, dir_id)
+                if result is None:
+                    raise Exception('Upload has been manually cancelled!')
+                LOGGER.info("Uploaded To G-Drive: " + file_name)
+                link = f"https://drive.google.com/folderview?id={dir_id}"
+            except Exception as e:
+                if isinstance(e, RetryError):
+                    LOGGER.info(f"Total Attempts: {e.last_attempt.attempt_number}")
+                    err = e.last_attempt.exception()
+                else:
+                    err = e
+                LOGGER.error(err)
+                self.__listener.onUploadError(str(err))
+                return
+            finally:
+                self.updater.cancel()
+        LOGGER.info(download_dict)
+        self.__listener.onUploadComplete(link)
+        LOGGER.info("Deleting downloaded file/folder..")
+        return link
 
     @retry(wait=wait_exponential(multiplier=2, min=3, max=6), stop=stop_after_attempt(5),
            retry=retry_if_exception_type(HttpError), before=before_log(LOGGER, logging.DEBUG))
